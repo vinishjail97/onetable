@@ -43,20 +43,17 @@ targetCatalogs:
       key33: "value3"
 datasets:
   - sourceCatalogTableIdentifier:
-      catalogTableIdentifier:
-        databaseName: "source-database-1"
-        tableName: "source-1"
+      tableIdentifier:
+        hierarchicalId: "source-database-1.source-1"
     targetCatalogTableIdentifiers:
       - catalogId: "target-1"
         tableFormat: "DELTA"
-        catalogTableIdentifier:
-          databaseName: "target-database-1"
-          tableName: "target-tableName-1"
+        tableIdentifier:
+          hierarchicalId: "target-database-1.target-tableName-1"
       - catalogId: "target-2"
         tableFormat: "HUDI"
-        catalogTableIdentifier:
-          databaseName: "target-database-2"
-          tableName: "target-tableName-2-delta"
+        tableIdentifier:
+          hierarchicalId: "target-database-2.target-tableName-2-delta"
   - sourceCatalogTableIdentifier:
       storageIdentifier:
         tableBasePath: s3://tpc-ds-datasets/1GB/hudi/catalog_sales
@@ -66,12 +63,9 @@ datasets:
     targetCatalogTableIdentifiers:
       - catalogId: "target-2"
         tableFormat: "ICEBERG"
-        catalogTableIdentifier:
-          databaseName: "target-database-2"
-          tableName: "target-tableName-2"
+        tableIdentifier:
+          hierarchicalId: "target-database-2.target-tableName-2"
       - catalogId: "target-3"
         tableFormat: "HUDI"
-        catalogTableIdentifier:
-          catalogName: "default-catalog-2"
-          databaseName: "target-database-3"
-          tableName: "target-tableName-3"
+        tableIdentifier:
+          hierarchicalId: "default-catalog-2.target-database-3.target-tableName-3"

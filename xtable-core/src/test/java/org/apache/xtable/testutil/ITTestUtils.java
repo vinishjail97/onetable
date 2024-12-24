@@ -67,12 +67,12 @@ public class ITTestUtils {
     }
 
     @Override
-    public boolean hasDatabase(String databaseName) {
+    public boolean hasDatabase(CatalogTableIdentifier tableIdentifier) {
       return false;
     }
 
     @Override
-    public void createDatabase(String databaseName) {}
+    public void createDatabase(CatalogTableIdentifier tableIdentifier) {}
 
     @Override
     public Object getTable(CatalogTableIdentifier tableIdentifier) {

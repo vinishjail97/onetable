@@ -57,7 +57,7 @@ import org.apache.xtable.model.InstantsForIncrementalSync;
 import org.apache.xtable.model.InternalSnapshot;
 import org.apache.xtable.model.InternalTable;
 import org.apache.xtable.model.TableChange;
-import org.apache.xtable.model.catalog.CatalogTableIdentifier;
+import org.apache.xtable.model.catalog.HierarchicalTableIdentifier;
 import org.apache.xtable.model.metadata.TableSyncMetadata;
 import org.apache.xtable.model.storage.TableFormat;
 import org.apache.xtable.model.sync.SyncMode;
@@ -594,10 +594,8 @@ public class TestConversionController {
                 .catalogProperties(Collections.emptyMap())
                 .build())
         .catalogTableIdentifier(
-            CatalogTableIdentifier.builder()
-                .databaseName("target-database" + suffix)
-                .tableName("target-tableName" + suffix)
-                .build())
+            new HierarchicalTableIdentifier(
+                "target-database" + suffix, "target-tableName" + suffix))
         .build();
   }
 

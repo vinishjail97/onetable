@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test;
 
 import org.apache.xtable.conversion.ExternalCatalogConfig;
 import org.apache.xtable.conversion.TargetCatalogConfig;
-import org.apache.xtable.model.catalog.CatalogTableIdentifier;
+import org.apache.xtable.model.catalog.HierarchicalTableIdentifier;
 import org.apache.xtable.spi.extractor.CatalogConversionSource;
 import org.apache.xtable.spi.sync.CatalogSyncClient;
 import org.apache.xtable.testutil.ITTestUtils.TestCatalogConversionSourceImpl;
@@ -61,10 +61,7 @@ class TestCatalogConversionFactory {
                     .catalogProperties(Collections.emptyMap())
                     .build())
             .catalogTableIdentifier(
-                CatalogTableIdentifier.builder()
-                    .databaseName("target-database")
-                    .tableName("target-tableName")
-                    .build())
+                new HierarchicalTableIdentifier("target-database", "target-tableName"))
             .build();
     CatalogSyncClient catalogSyncClient =
         CatalogConversionFactory.getInstance()

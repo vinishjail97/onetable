@@ -57,10 +57,12 @@ import org.apache.xtable.conversion.SourceTable;
 import org.apache.xtable.conversion.TargetCatalogConfig;
 import org.apache.xtable.conversion.TargetTable;
 import org.apache.xtable.model.catalog.CatalogTableIdentifier;
+import org.apache.xtable.model.catalog.HierarchicalTableIdentifier;
 import org.apache.xtable.model.sync.SyncMode;
 import org.apache.xtable.reflection.ReflectionUtils;
 import org.apache.xtable.spi.extractor.CatalogConversionSource;
 import org.apache.xtable.utilities.RunCatalogSync.DatasetConfig.StorageIdentifier;
+import org.apache.xtable.utilities.RunCatalogSync.DatasetConfig.TableIdentifier;
 import org.apache.xtable.utilities.RunCatalogSync.DatasetConfig.TargetTableIdentifier;
 
 /**
@@ -156,7 +158,8 @@ public class RunCatalogSync {
       } else {
         sourceTable =
             catalogConversionSource.getSourceTable(
-                dataset.getSourceCatalogTableIdentifier().getCatalogTableIdentifier());
+                getCatalogTableIdentifier(
+                    dataset.getSourceCatalogTableIdentifier().getTableIdentifier()));
       }
       List<TargetTable> targetTables = new ArrayList<>();
       Map<TargetTable, List<TargetCatalogConfig>> targetCatalogs = new HashMap<>();
@@ -178,7 +181,8 @@ public class RunCatalogSync {
             .add(
                 TargetCatalogConfig.builder()
                     .catalogTableIdentifier(
-                        targetCatalogTableIdentifier.getCatalogTableIdentifier())
+                        getCatalogTableIdentifier(
+                            targetCatalogTableIdentifier.getTableIdentifier()))
                     .catalogConfig(catalogsById.get(targetCatalogTableIdentifier.getCatalogId()))
                     .build());
       }
@@ -229,6 +233,13 @@ public class RunCatalogSync {
     return CONVERSION_SOURCE_PROVIDERS;
   }
 
+  static CatalogTableIdentifier getCatalogTableIdentifier(TableIdentifier tableIdentifier) {
+    if (tableIdentifier.getHierarchicalId() != null) {
+      return new HierarchicalTableIdentifier(tableIdentifier.getHierarchicalId());
+    }
+    throw new IllegalArgumentException("Invalid tableIdentifier configuration provided");
+  }
+
   @Data
   public static class DatasetConfig {
     /**
@@ -258,7 +269,7 @@ public class RunCatalogSync {
     @Data
     public static class SourceTableIdentifier {
       /** Specifies the table identifier in the source catalog. */
-      CatalogTableIdentifier catalogTableIdentifier;
+      TableIdentifier tableIdentifier;
       /**
        * (Optional) Provides direct storage details such as a table’s base path (like an S3
        * location) and the partition specification. This allows reading from a source even if it is
@@ -280,7 +291,16 @@ public class RunCatalogSync {
        */
       String tableFormat;
       /** Specifies the table identifier in the target catalog. */
-      CatalogTableIdentifier catalogTableIdentifier;
+      TableIdentifier tableIdentifier;
+    }
+
+    @Data
+    public static class TableIdentifier {
+      /**
+       * Specifics the three level hierarchical table identifier for {@link
+       * HierarchicalTableIdentifier}
+       */
+      String hierarchicalId;
     }
 
     /**
