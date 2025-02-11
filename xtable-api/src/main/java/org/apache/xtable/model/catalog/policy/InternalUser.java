@@ -38,6 +38,6 @@ public class InternalUser {
   /** The list of roles assigned to this user. */
   List<InternalRole> roles;
 
-  /**  Contains information about how and when this user was created and last modified. */
+  /** Contains information about how and when this user was created and last modified. */
   InternalChangeLogInfo changeLogInfo;
 }
