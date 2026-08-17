@@ -24,6 +24,10 @@ on:
   push:
     branches:
       - "main"
+      # TEMPORARY: scratch branch used to validate the Hudi 1.x (table version 9)
+      # work end to end while the Hudi fixes it needs are unreleased. Remove with
+      # the rest of the temporary steps below.
+      - "834-ci-validate-hudi-src"
 
   pull_request:
     branches:
@@ -32,7 +36,15 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # TEMPORARY: raised from 30 to accommodate building Hudi from source on a
+    # 2-core runner. Restore to 30 once XTable depends on a released Hudi.
+    timeout-minutes: 90
+    env:
+      # TEMPORARY: apache/hudi master (989badc395) plus apache/hudi#19123, which
+      # is still open. #19123 is required for the nested partition column case in
+      # ITConversionController. Pinned by SHA so the build is reproducible.
+      HUDI_REPO: https://github.com/vinishjail97/hudi.git
+      HUDI_SHA: 03342c63e28faa4adcdf91d179b3a3d056a491a3
     steps:
       - uses: actions/checkout@v7
 
@@ -42,6 +54,38 @@ jobs:
           java-version: '11'
           distribution: 'temurin'
           cache: maven
+
+      # TEMPORARY: XTable's pom pins hudi.version to 1.3.0-SNAPSHOT, which no
+      # repository publishes. Maven Central has no snapshots and Apache's snapshot
+      # repository carries no Hudi 1.x snapshot, so the dependency cannot resolve.
+      # Build the modules XTable needs from source until a Hudi release carries
+      # apache/hudi#19111, #19126, #19123 and the hudi-common package reorganization
+      # (apache/hudi#19193, #19195). Then delete every step marked TEMPORARY.
+      - name: Cache Hudi artifacts
+        id: hudi-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/apache/hudi
+          key: hudi-m2-${{ env.HUDI_SHA }}-spark3.4-scala2.12
+
+      - name: Build Hudi from source
+        if: steps.hudi-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git init hudi-src
+          cd hudi-src
+          git remote add origin "$HUDI_REPO"
+          git fetch --depth 1 origin "$HUDI_SHA"
+          git checkout FETCH_HEAD
+          # Only the modules XTable depends on. A full reactor build also fails on
+          # hudi-flink-client, whose hudi-flink2.1.x dependency is not in the reactor.
+          # -Dspark3.4 sets hudi.spark.module so hudi-spark3.4-bundle_2.12 is built.
+          mvn install -ntp -B -DskipTests -T 1C \
+            -Dscala-2.12 -Dspark3.4 \
+            -Drat.skip=true -Dcheckstyle.skip=true -Dspotless.check.skip=true \
+            -Denforcer.skip=true -Dmaven.javadoc.skip=true -Dmaven.source.skip=true \
+            -pl packaging/hudi-spark-bundle,hudi-utilities,hudi-client/hudi-java-client,hudi-sync/hudi-sync-common,hudi-sync/hudi-hive-sync,hudi-common,hudi-hadoop-common,hudi-client/hudi-client-common \
+            -am
 
       - name: Build all module with Maven
         run: ./mvnw clean install -ntp -B
