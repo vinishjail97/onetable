@@ -72,8 +72,10 @@ jobs:
         if: steps.hudi-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          git init hudi-src
-          cd hudi-src
+          # Clone OUTSIDE the workspace. A checkout under the repo directory gets
+          # scanned by apache-rat, which then fails on Hudi's own files.
+          git init "$RUNNER_TEMP/hudi-src"
+          cd "$RUNNER_TEMP/hudi-src"
           git remote add origin "$HUDI_REPO"
           git fetch --depth 1 origin "$HUDI_SHA"
           git checkout FETCH_HEAD
