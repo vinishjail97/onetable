@@ -772,6 +772,9 @@
                     <skip>${skipUTs}</skip>
                     <redirectTestOutputToFile>true</redirectTestOutputToFile>
                     <trimStackTrace>false</trimStackTrace>
+                    <!-- Hudi stamps its timeline in UTC, so a JVM on any other zone reads its own
+                         commits as not yet completed. Pin the tests to UTC. -->
+                    <argLine>-Duser.timezone=UTC</argLine>
                     <forkedProcessExitTimeoutInSeconds>120</forkedProcessExitTimeoutInSeconds>
                 </configuration>
             </plugin>
@@ -792,7 +795,7 @@
                     <reuseForks>false</reuseForks>
                     <forkCount>6</forkCount>
                     <trimStackTrace>false</trimStackTrace>
-                    <argLine>-Xmx1500m</argLine>
+                    <argLine>-Xmx1500m -Duser.timezone=UTC</argLine>
                     <forkedProcessExitTimeoutInSeconds>120</forkedProcessExitTimeoutInSeconds>
                 </configuration>
             </plugin>
@@ -962,7 +965,8 @@
                         </excludes>
                         <licenseHeader>
                             <file>style/xml-license-header</file>
-                            <delimiter>^&lt;project|^&lt;configuration|^&lt;Configuration|^&lt;extensions|^&lt;component</delimiter>
+                            <!-- ^&lt;cache is the root element of .mvn/maven-build-cache-config.xml -->
+                            <delimiter>^&lt;project|^&lt;configuration|^&lt;Configuration|^&lt;extensions|^&lt;component|^&lt;cache</delimiter>
                             <skipLinesMatching>^&lt;.*xml.+?$</skipLinesMatching>
                         </licenseHeader>
                     </pom>

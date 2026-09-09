@@ -27,6 +27,17 @@
 
     <artifactId>xtable-utilities_${scala.binary.version}</artifactId>
     <name>XTable Project Utilities</name>
+    <properties>
+        <!--
+          This module produces a large bundled jar (~1 GB). Keep it out of the
+          maven-build-cache entirely: the property disables both restore and save
+          for this project, so the artifact never enters the cache directory that
+          CI persists between runs. Shading is cheap relative to the test suites
+          the cache is there to skip, so there is nothing worth caching here.
+          See .mvn/maven-build-cache-config.xml.
+        -->
+        <maven.build.cache.enabled>false</maven.build.cache.enabled>
+    </properties>
 
     <dependencies>
         <dependency>
@@ -234,14 +245,6 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.apache.xtable</groupId>
-            <artifactId>xtable-core_${scala.binary.version}</artifactId>
-            <version>${project.version}</version>
-            <classifier>tests</classifier>
-            <type>test-jar</type>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
             <groupId>org.apache.hudi</groupId>
             <artifactId>hudi-spark${spark.version.prefix}-bundle_${scala.binary.version}</artifactId>
             <scope>test</scope>
@@ -283,6 +286,7 @@
                             <resource>META-INF/NOTICE</resource>
                             <file>target/classes/META-INF/NOTICE-bundled</file>
                         </transformer>
+                        <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                         <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                             <mainClass>org.apache.xtable.utilities.RunSync</mainClass>
                         </transformer>
