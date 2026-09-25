@@ -666,8 +666,7 @@ public class HudiConversionTarget implements ConversionTarget {
                   .withProperties(properties)
                   // Build the column-stats index for all tables. The partition-stats index is
                   // disabled independently: its generation path rebuilds a file-system view over
-                  // the
-                  // committed external parquet files and groups them by fileId, but XTable's
+                  // the committed external parquet files and groups them by fileId, but XTable's
                   // externally-registered files have non-Hudi names whose fileId cannot be parsed
                   // once the "_hudiext" marker is stripped, which leads to failures on partitioned
                   // tables. Disabling partition stats (while keeping column stats) requires the

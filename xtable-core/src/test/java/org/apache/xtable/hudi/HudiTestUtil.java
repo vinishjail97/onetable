@@ -90,7 +90,8 @@ public class HudiTestUtil {
             HoodieMetadataConfig.newBuilder()
                 .withMaxNumDeltaCommitsBeforeCompaction(2)
                 .enable(true)
-                // Mirror HudiConversionTarget: col-stats index only for un-partitioned tables.
+                // Test setup writes build the col-stats index only for un-partitioned tables.
+                // HudiConversionTarget builds it for all tables, with partition stats off.
                 .withMetadataIndexColumnStats(!metaClient.getTableConfig().isTablePartitioned())
                 .withProperties(properties)
                 .build())
