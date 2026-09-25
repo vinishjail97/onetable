@@ -37,6 +37,7 @@ import org.junit.jupiter.api.Test;
 import org.apache.hudi.avro.model.HoodieCleanMetadata;
 import org.apache.hudi.common.table.HoodieTableConfig;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
+import org.apache.hudi.common.table.HoodieTableVersion;
 import org.apache.hudi.common.table.timeline.HoodieActiveTimeline;
 import org.apache.hudi.common.table.timeline.HoodieInstant;
 import org.apache.hudi.common.table.timeline.HoodieTimeline;
@@ -71,6 +72,7 @@ class TestHudiConversionSource {
     when(mockMetaClient.getActiveTimeline()).thenReturn(mockActiveTimeline);
     when(mockMetaClient.getTableConfig()).thenReturn(mockTableConfig);
     when(mockTableConfig.isMetadataTableAvailable()).thenReturn(false);
+    when(mockTableConfig.getTableVersion()).thenReturn(HoodieTableVersion.SIX);
     doReturn(getStorageConf(new Configuration())).when(mockMetaClient).getStorageConf();
     when(mockMetaClient.getBasePath()).thenReturn(new StoragePath("/tmp/test-table"));
     when(mockActiveTimeline.getCleanerTimeline()).thenReturn(mockCleanerTimeline);
@@ -113,6 +115,7 @@ class TestHudiConversionSource {
     when(mockMetaClient.getActiveTimeline()).thenReturn(mockActiveTimeline);
     when(mockMetaClient.getTableConfig()).thenReturn(mockTableConfig);
     when(mockTableConfig.isMetadataTableAvailable()).thenReturn(false);
+    when(mockTableConfig.getTableVersion()).thenReturn(HoodieTableVersion.SIX);
     doReturn(getStorageConf(new Configuration())).when(mockMetaClient).getStorageConf();
     when(mockMetaClient.getBasePath()).thenReturn(new StoragePath("/tmp/test-table"));
     when(mockActiveTimeline.getCleanerTimeline()).thenReturn(mockCleanerTimeline);
@@ -156,6 +159,7 @@ class TestHudiConversionSource {
     when(mockMetaClient.getActiveTimeline()).thenReturn(mockActiveTimeline);
     when(mockMetaClient.getTableConfig()).thenReturn(mockTableConfig);
     when(mockTableConfig.isMetadataTableAvailable()).thenReturn(false);
+    when(mockTableConfig.getTableVersion()).thenReturn(HoodieTableVersion.SIX);
     doReturn(getStorageConf(new Configuration())).when(mockMetaClient).getStorageConf();
     when(mockMetaClient.getBasePath()).thenReturn(new StoragePath("/tmp/test-table"));
     when(mockActiveTimeline.getCleanerTimeline()).thenReturn(mockCleanerTimeline);
