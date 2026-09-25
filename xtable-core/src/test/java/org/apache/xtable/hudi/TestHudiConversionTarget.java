@@ -227,7 +227,7 @@ public class TestHudiConversionTarget {
     HoodieTableConfig mockTableConfig = mock(HoodieTableConfig.class);
     when(mockMetaClient.getTableConfig()).thenReturn(mockTableConfig);
     when(mockTableConfig.getTableVersion()).thenReturn(HoodieTableVersion.current());
-    when(mockBaseFileUpdatesExtractor.convertDiff(input, instant, HoodieIndexVersion.V2))
+    when(mockBaseFileUpdatesExtractor.convertDiff(input, instant, HoodieIndexVersion.V2, false))
         .thenReturn(output);
 
     targetClient.syncFilesForDiff(input);
@@ -248,7 +248,7 @@ public class TestHudiConversionTarget {
         BaseFileUpdatesExtractor.ReplaceMetadata.of(
             Collections.emptyMap(), Collections.emptyList());
     when(mockCommitState.getInstantTime()).thenReturn(instant);
-    when(mockBaseFileUpdatesExtractor.extractSnapshotChanges(input, mockMetaClient, instant))
+    when(mockBaseFileUpdatesExtractor.extractSnapshotChanges(input, mockMetaClient, instant, false))
         .thenReturn(output);
 
     targetClient.syncFilesForSnapshot(input);

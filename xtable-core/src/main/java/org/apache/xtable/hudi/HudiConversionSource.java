@@ -28,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -38,7 +39,6 @@ import lombok.Value;
 
 import org.apache.hudi.avro.model.HoodieCleanMetadata;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
-import org.apache.hudi.common.table.HoodieTableVersion;
 import org.apache.hudi.common.table.timeline.HoodieActiveTimeline;
 import org.apache.hudi.common.table.timeline.HoodieInstant;
 import org.apache.hudi.common.table.timeline.HoodieTimeline;
@@ -174,17 +174,22 @@ public class HudiConversionSource implements ConversionSource<HoodieInstant> {
 
   @Override
   public boolean isIncrementalSyncSafeFrom(Instant instant) {
-    return doesCommitExistsAsOfInstant(instant) && !isAffectedByCleanupProcess(instant);
+    HoodieInstant commitAtInstant = getCommitAtInstant(instant);
+    if (commitAtInstant == null) {
+      return false;
+    }
+    // On table version 8+ the checkpoint is a completion time, but the cleaner retains commits by
+    // requested time, so check the cleaner against the requested time of the synced commit.
+    Instant cleanerCheckInstant =
+        usesCompletionTimeOrdering()
+            ? HudiInstantUtils.parseFromInstantTime(commitAtInstant.requestedTime())
+            : instant;
+    return !isAffectedByCleanupProcess(cleanerCheckInstant);
   }
 
   @Override
   public String getCommitIdentifier(HoodieInstant commit) {
     return commit.requestedTime();
-  }
-
-  private boolean doesCommitExistsAsOfInstant(Instant instant) {
-    HoodieInstant hoodieInstant = getCommitAtInstant(instant);
-    return hoodieInstant != null;
   }
 
   @SneakyThrows
@@ -248,16 +253,8 @@ public class HudiConversionSource implements ConversionSource<HoodieInstant> {
     return metaClient.getActiveTimeline().filterCompletedInstants();
   }
 
-  /**
-   * Table version 8+ (Hudi 1.x, timeline layout V2) makes a commit visible at its completion time
-   * rather than its requested (instant) time, so incremental selection and ordering must be based
-   * on completion time. Table version 6 keeps the legacy requested-time ordering.
-   */
   private boolean usesCompletionTimeOrdering() {
-    return metaClient
-        .getTableConfig()
-        .getTableVersion()
-        .greaterThanOrEquals(HoodieTableVersion.EIGHT);
+    return HudiInstantUtils.usesCompletionTimeOrdering(metaClient);
   }
 
   private HoodieInstant getLatestCompletedInstant(HoodieTimeline completedTimeline) {
@@ -362,9 +359,55 @@ public class HudiConversionSource implements ConversionSource<HoodieInstant> {
   }
 
   private HoodieInstant getCommitAtInstant(Instant instant) {
+    if (usesCompletionTimeOrdering()) {
+      return getCommitAtCompletionTime(instant);
+    }
     return getCompletedCommits()
         .findInstantsBeforeOrEquals(HudiInstantUtils.convertInstantToCommit(instant))
         .lastInstant()
+        .orElse(null);
+  }
+
+  /**
+   * Resolves a sync checkpoint on table version 8+, where the checkpoint is a completion time (see
+   * {@link HudiInstantUtils#getSyncInstant}). A checkpoint written while the source table was on
+   * version 6 holds a requested time, so an exact requested-time match is accepted next. Otherwise
+   * the last commit that completed at or before the checkpoint is returned.
+   */
+  private HoodieInstant getCommitAtCompletionTime(Instant instant) {
+    List<HoodieInstant> completedInstants =
+        getCompletedCommits().getInstants().stream()
+            .filter(hoodieInstant -> hoodieInstant.getCompletionTime() != null)
+            .collect(Collectors.toList());
+    Optional<HoodieInstant> completedAtInstant =
+        completedInstants.stream()
+            .filter(
+                hoodieInstant ->
+                    HudiInstantUtils.parseFromInstantTime(hoodieInstant.getCompletionTime())
+                        .equals(instant))
+            .findFirst();
+    if (completedAtInstant.isPresent()) {
+      return completedAtInstant.get();
+    }
+    // Savepoint instants reuse the requested time of the commit they pin, hence filtering.
+    Optional<HoodieInstant> requestedAtInstant =
+        completedInstants.stream()
+            .filter(
+                hoodieInstant -> !HoodieTimeline.SAVEPOINT_ACTION.equals(hoodieInstant.getAction()))
+            .filter(
+                hoodieInstant ->
+                    HudiInstantUtils.parseFromInstantTime(hoodieInstant.requestedTime())
+                        .equals(instant))
+            .findFirst();
+    if (requestedAtInstant.isPresent()) {
+      return requestedAtInstant.get();
+    }
+    return completedInstants.stream()
+        .filter(
+            hoodieInstant ->
+                !HudiInstantUtils.parseFromInstantTime(hoodieInstant.getCompletionTime())
+                    .isAfter(instant))
+        .max(Comparator.comparing(HoodieInstant::getCompletionTime))
         .orElse(null);
   }
 

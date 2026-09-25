@@ -30,7 +30,7 @@ public class HudiTargetConfig {
   /**
    * Table format version to write for the Hudi target. Supported values are {@code 6} (the legacy
    * 0.x timeline layout, column-stats index V1) and {@code 9} (the Hudi 1.x timeline layout,
-   * column-stats index V2). Defaults to {@code 9}.
+   * column-stats index V2). Defaults to {@code 6}.
    */
   public static final String HUDI_TABLE_VERSION = "xtable.hudi.target.table_version";
 
@@ -43,15 +43,29 @@ public class HudiTargetConfig {
     if (properties != null) {
       String configured = properties.getProperty(HUDI_TABLE_VERSION);
       if (configured != null && !configured.trim().isEmpty()) {
-        tableVersion = HoodieTableVersion.fromVersionCode(Integer.parseInt(configured.trim()));
+        tableVersion = parseTableVersion(configured.trim());
       }
     }
     if (tableVersion != HoodieTableVersion.SIX && tableVersion != HoodieTableVersion.NINE) {
-      throw new IllegalArgumentException(
-          String.format(
-              "Unsupported Hudi target table version %s. Only table versions 6 and 9 are supported via %s.",
-              tableVersion.versionCode(), HUDI_TABLE_VERSION));
+      throw unsupportedTableVersion(String.valueOf(tableVersion.versionCode()), null);
     }
     return new HudiTargetConfig(tableVersion);
+  }
+
+  private static HoodieTableVersion parseTableVersion(String configured) {
+    try {
+      return HoodieTableVersion.fromVersionCode(Integer.parseInt(configured));
+    } catch (RuntimeException e) {
+      // A non-numeric value, or a version code that Hudi does not know.
+      throw unsupportedTableVersion(configured, e);
+    }
+  }
+
+  private static IllegalArgumentException unsupportedTableVersion(String value, Throwable cause) {
+    return new IllegalArgumentException(
+        String.format(
+            "Unsupported Hudi target table version %s. Only table versions 6 and 9 are supported via %s.",
+            value, HUDI_TABLE_VERSION),
+        cause);
   }
 }

@@ -114,8 +114,11 @@ public class HudiConversionTarget implements ConversionTarget {
   // database to register the target table under, resolved from the target namespace
   private String databaseName;
   // Hudi table format version to write (6 = legacy 0.x layout, 9 = Hudi 1.x layout), resolved from
-  // the xtable.hudi.target.table_version config; defaults to version 9.
+  // the xtable.hudi.target.table_version config; defaults to version 6.
   private HoodieTableVersion tableVersion = HudiTargetConfig.DEFAULT_TABLE_VERSION;
+  // Paimon lays files out as <partition>/bucket-N/<file>, so the bucket directory is a file-group
+  // prefix only when the source is Paimon. Set on each beginSync from the source table format.
+  private boolean useExternalFileGroupPrefix;
 
   public HudiConversionTarget() {}
 
@@ -137,6 +140,7 @@ public class HudiConversionTarget implements ConversionTarget {
     this.databaseName = resolveDatabaseName(targetTable);
     this.tableVersion =
         HudiTargetConfig.fromProperties(targetTable.getAdditionalProperties()).getTableVersion();
+    warnIfExistingTableVersionDiffers();
   }
 
   @VisibleForTesting
@@ -193,6 +197,28 @@ public class HudiConversionTarget implements ConversionTarget {
     this.databaseName = resolveDatabaseName(targetTable);
     this.tableVersion =
         HudiTargetConfig.fromProperties(targetTable.getAdditionalProperties()).getTableVersion();
+    warnIfExistingTableVersionDiffers();
+  }
+
+  /**
+   * The configured table version applies only when the table is created, so an existing table keeps
+   * its own version.
+   */
+  private void warnIfExistingTableVersionDiffers() {
+    metaClient.ifPresent(
+        client -> {
+          HoodieTableVersion existingVersion = client.getTableConfig().getTableVersion();
+          if (existingVersion != tableVersion) {
+            log.warn(
+                "Hudi target table at {} is at table version {}, which differs from the configured {}={}."
+                    + " The configured version applies only when the table is created, so the table stays at version {}.",
+                tableDataPath,
+                existingVersion.versionCode(),
+                HudiTargetConfig.HUDI_TABLE_VERSION,
+                tableVersion.versionCode(),
+                existingVersion.versionCode());
+          }
+        });
   }
 
   /** Uses the first namespace level as the Hudi database name, or the default if none is set. */
@@ -275,7 +301,10 @@ public class HudiConversionTarget implements ConversionTarget {
   public void syncFilesForSnapshot(List<PartitionFileGroup> partitionedDataFiles) {
     BaseFileUpdatesExtractor.ReplaceMetadata replaceMetadata =
         baseFileUpdatesExtractor.extractSnapshotChanges(
-            partitionedDataFiles, getMetaClient(), commitState.getInstantTime());
+            partitionedDataFiles,
+            getMetaClient(),
+            commitState.getInstantTime(),
+            useExternalFileGroupPrefix);
     commitState.setReplaceMetadata(replaceMetadata);
   }
 
@@ -288,12 +317,16 @@ public class HudiConversionTarget implements ConversionTarget {
         existingIndexVersionOrDefault(PARTITION_NAME_COLUMN_STATS, metaClient.get());
     BaseFileUpdatesExtractor.ReplaceMetadata replaceMetadata =
         baseFileUpdatesExtractor.convertDiff(
-            internalFilesDiff, commitState.getInstantTime(), indexVersion);
+            internalFilesDiff,
+            commitState.getInstantTime(),
+            indexVersion,
+            useExternalFileGroupPrefix);
     commitState.setReplaceMetadata(replaceMetadata);
   }
 
   @Override
   public void beginSync(InternalTable table) {
+    useExternalFileGroupPrefix = TableFormat.PAIMON.equals(table.getTableFormat());
     if (!metaClient.isPresent()) {
       metaClient =
           Optional.of(
@@ -326,6 +359,32 @@ public class HudiConversionTarget implements ConversionTarget {
                 .lastInstant()
                 .toJavaOptional()
                 .flatMap(instant -> getMetadata(instant, client)));
+  }
+
+  /**
+   * XTable 0.4.0 registered Paimon files under the {@code <partition>/bucket-N} partition. The
+   * incremental sync now keys those files by {@code <partition>}, so its file removals would not
+   * match the old file groups. A snapshot sync replaces the old file groups once.
+   */
+  @Override
+  public boolean isIncrementalSyncSafe() {
+    if (!metaClient.isPresent()) {
+      return true;
+    }
+    boolean isPaimonSource =
+        getTableMetadata()
+            .map(TableSyncMetadata::getSourceTableFormat)
+            .filter(TableFormat.PAIMON::equals)
+            .isPresent();
+    if (isPaimonSource
+        && baseFileUpdatesExtractor.hasFileGroupsInExternalFileGroupPrefixPartitions(
+            metaClient.get())) {
+      log.info(
+          "Hudi target table at {} has file groups under bucket-N partitions written by an older XTable version.",
+          tableDataPath);
+      return false;
+    }
+    return true;
   }
 
   @Override
@@ -638,7 +697,7 @@ public class HudiConversionTarget implements ConversionTarget {
       properties.setProperty(HoodieMetadataConfig.AUTO_INITIALIZE.key(), "false");
       return HoodieWriteConfig.newBuilder()
           // Write at the table's own format version (selected via xtable.hudi.target.table_version,
-          // default 9) and disable auto-upgrade so the write client never migrates the table to a
+          // default 6) and disable auto-upgrade so the write client never migrates the table to a
           // different version behind our back. See
           // https://github.com/apache/incubator-xtable/issues/834.
           .withWriteTableVersion(metaClient.getTableConfig().getTableVersion().versionCode())

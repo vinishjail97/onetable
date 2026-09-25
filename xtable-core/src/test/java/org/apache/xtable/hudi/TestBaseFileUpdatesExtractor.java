@@ -145,7 +145,7 @@ public class TestBaseFileUpdatesExtractor {
     BaseFileUpdatesExtractor extractor =
         BaseFileUpdatesExtractor.of(CONTEXT, new CachingPath(tableBasePath));
     BaseFileUpdatesExtractor.ReplaceMetadata replaceMetadata =
-        extractor.convertDiff(diff, COMMIT_TIME, HoodieIndexVersion.V1);
+        extractor.convertDiff(diff, COMMIT_TIME, HoodieIndexVersion.V1, false);
 
     // validate removed files
     Map<String, List<String>> expectedPartitionToReplacedFileIds = new HashMap<>();
@@ -234,7 +234,7 @@ public class TestBaseFileUpdatesExtractor {
                 .files(Arrays.asList(addedFile3))
                 .build());
     BaseFileUpdatesExtractor.ReplaceMetadata replaceMetadata =
-        extractor.extractSnapshotChanges(partitionedDataFiles, metaClient, COMMIT_TIME);
+        extractor.extractSnapshotChanges(partitionedDataFiles, metaClient, COMMIT_TIME, false);
 
     // table is empty so there be no removals
     assertEquals(Collections.emptyMap(), replaceMetadata.getPartitionToReplacedFileIds());
@@ -334,7 +334,7 @@ public class TestBaseFileUpdatesExtractor {
     BaseFileUpdatesExtractor extractor =
         BaseFileUpdatesExtractor.of(CONTEXT, new CachingPath(tableBasePath));
     BaseFileUpdatesExtractor.ReplaceMetadata replaceMetadata =
-        extractor.extractSnapshotChanges(partitionedDataFiles, metaClient, COMMIT_TIME);
+        extractor.extractSnapshotChanges(partitionedDataFiles, metaClient, COMMIT_TIME, false);
 
     // validate removed files
     Map<String, List<String>> expectedPartitionToReplacedFileIds = new HashMap<>();
@@ -411,7 +411,7 @@ public class TestBaseFileUpdatesExtractor {
     BaseFileUpdatesExtractor extractor =
         BaseFileUpdatesExtractor.of(CONTEXT, new CachingPath(tableBasePath));
     BaseFileUpdatesExtractor.ReplaceMetadata replaceMetadata =
-        extractor.extractSnapshotChanges(partitionedDataFiles, metaClient, COMMIT_TIME);
+        extractor.extractSnapshotChanges(partitionedDataFiles, metaClient, COMMIT_TIME, false);
 
     // validate removed files
     Map<String, List<String>> expectedPartitionToReplacedFileIds =

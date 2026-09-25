@@ -20,6 +20,7 @@ package org.apache.xtable.hudi;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Properties;
 
@@ -55,5 +56,17 @@ public class TestHudiTargetConfig {
     Properties props = new Properties();
     props.setProperty(HudiTargetConfig.HUDI_TABLE_VERSION, "8");
     assertThrows(IllegalArgumentException.class, () -> HudiTargetConfig.fromProperties(props));
+  }
+
+  @Test
+  void rejectsNonNumericAndUnknownVersions() {
+    for (String value : new String[] {"abc", "42"}) {
+      Properties props = new Properties();
+      props.setProperty(HudiTargetConfig.HUDI_TABLE_VERSION, value);
+      IllegalArgumentException exception =
+          assertThrows(
+              IllegalArgumentException.class, () -> HudiTargetConfig.fromProperties(props));
+      assertTrue(exception.getMessage().contains(HudiTargetConfig.HUDI_TABLE_VERSION));
+    }
   }
 }
