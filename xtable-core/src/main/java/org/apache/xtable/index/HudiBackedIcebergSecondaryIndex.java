@@ -18,12 +18,14 @@
  
 package org.apache.xtable.index;
 
+import static org.apache.hudi.metadata.HoodieTableMetadataUtil.PARTITION_NAME_SECONDARY_INDEX;
 import static org.apache.hudi.metadata.HoodieTableMetadataUtil.PARTITION_NAME_SECONDARY_INDEX_PREFIX;
 import static org.apache.spark.sql.functions.col;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Properties;
 
 import lombok.extern.log4j.Log4j2;
@@ -41,13 +43,23 @@ import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructType;
 
+import org.apache.hudi.client.SparkRDDWriteClient;
 import org.apache.hudi.client.common.HoodieSparkEngineContext;
+import org.apache.hudi.client.transaction.lock.InProcessLockProvider;
 import org.apache.hudi.common.config.HoodieMetadataConfig;
 import org.apache.hudi.common.data.HoodiePairData;
+import org.apache.hudi.common.model.WriteConcurrencyMode;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.table.HoodieTableVersion;
+import org.apache.hudi.common.table.timeline.HoodieInstant;
+import org.apache.hudi.common.table.timeline.TimelineUtils;
+import org.apache.hudi.config.HoodieIndexConfig;
+import org.apache.hudi.config.HoodieLockConfig;
+import org.apache.hudi.config.HoodieWriteConfig;
 import org.apache.hudi.data.HoodieJavaPairRDD;
 import org.apache.hudi.data.HoodieJavaRDD;
+import org.apache.hudi.index.HoodieIndex;
+import org.apache.hudi.index.HoodieSparkIndexClient;
 import org.apache.hudi.metadata.HoodieBackedTableMetadata;
 import org.apache.hudi.metadata.HoodieTableMetadataUtil;
 import org.apache.hudi.storage.HoodieStorage;
@@ -68,7 +80,10 @@ import org.apache.xtable.conversion.SourceTable;
 import org.apache.xtable.conversion.TargetTable;
 import org.apache.xtable.hudi.HudiTargetConfig;
 import org.apache.xtable.iceberg.IcebergConversionSourceProvider;
+import org.apache.xtable.model.metadata.TableSyncMetadata;
 import org.apache.xtable.model.storage.TableFormat;
+import org.apache.xtable.model.sync.SyncResult;
+import org.apache.xtable.model.sync.SyncStatusCode;
 
 /**
  * Secondary index for an Iceberg table backed by the Hudi metadata table. The index is built by
@@ -115,9 +130,130 @@ public class HudiBackedIcebergSecondaryIndex implements Index<Table> {
     Configuration configuration = javaSparkContext.hadoopConfiguration();
     IcebergConversionSourceProvider sourceProvider = new IcebergConversionSourceProvider();
     sourceProvider.init(configuration);
-    new ConversionController(configuration)
-        .sync(getConversionConfig(icebergTable, columnName), sourceProvider);
+    SyncResult syncResult =
+        new ConversionController(configuration)
+            .sync(getConversionConfig(icebergTable, columnName), sourceProvider)
+            .get(TableFormat.HUDI);
+    if (syncResult != null
+        && syncResult.getTableFormatSyncStatus().getStatusCode() != SyncStatusCode.SUCCESS) {
+      throw new IllegalStateException(
+          "Failed to sync the secondary index for column "
+              + columnName
+              + " of table "
+              + tableLocation
+              + ": "
+              + syncResult.getTableFormatSyncStatus().getErrorDetails());
+    }
+    // A sync builds a missing index only when it commits, and it does not commit when the table
+    // has no new snapshot. Hudi's indexer builds the index of a column that is added later, or
+    // added again after a drop, from the files the table already has.
+    if (!doesIndexExist(columnName)) {
+      buildIndex(columnName);
+    }
     log.info("Synced secondary index for column {} of table {}", columnName, tableLocation);
+  }
+
+  private void buildIndex(String columnName) {
+    HoodieTableMetaClient metaClient = getMetaClient();
+    try {
+      new HoodieSparkIndexClient(getIndexWriteConfig(metaClient, columnName), engineContext)
+          .create(
+              metaClient,
+              columnName,
+              PARTITION_NAME_SECONDARY_INDEX,
+              Collections.singletonMap(columnName, Collections.emptyMap()),
+              Collections.emptyMap(),
+              Collections.emptyMap());
+    } catch (Exception e) {
+      throw new IllegalStateException(
+          "Failed to build the secondary index for column " + columnName + " of " + dataPath, e);
+    }
+  }
+
+  @Override
+  public void dropIndex(Table icebergTable, String columnName) {
+    HoodieTableMetaClient metaClient = getMetaClient();
+    try (SparkRDDWriteClient<?> writeClient =
+        new SparkRDDWriteClient<>(engineContext, getIndexWriteConfig(metaClient, null))) {
+      writeClient.dropIndex(
+          Collections.singletonList(PARTITION_NAME_SECONDARY_INDEX_PREFIX + columnName));
+    }
+    log.info("Dropped secondary index for column {} of table {}", columnName, tableLocation);
+  }
+
+  /**
+   * Write config for index operations on the Hudi table. It matches the config the Hudi target
+   * writes with, and it keeps every metadata partition the target builds enabled, because Hudi
+   * deletes enabled-by-default partitions that a write config leaves out.
+   *
+   * @param secondaryIndexColumn the column whose secondary index Hudi's indexer builds, or null
+   *     when no index is built
+   */
+  private HoodieWriteConfig getIndexWriteConfig(
+      HoodieTableMetaClient metaClient, String secondaryIndexColumn) {
+    Properties properties = new Properties();
+    properties.setProperty(HoodieMetadataConfig.AUTO_INITIALIZE.key(), "false");
+    HoodieMetadataConfig.Builder metadataConfig =
+        HoodieMetadataConfig.newBuilder()
+            .enable(true)
+            .withProperties(properties)
+            .withEnableGlobalRecordLevelIndex(true)
+            .withMetadataIndexColumnStats(true)
+            .withMetadataIndexPartitionStats(false);
+    if (secondaryIndexColumn != null) {
+      // the indexer names the partition it builds from these settings
+      metadataConfig
+          .withSecondaryIndexEnabled(true)
+          .withSecondaryIndexForColumn(secondaryIndexColumn);
+    }
+    return HoodieWriteConfig.newBuilder()
+        .withPath(dataPath)
+        .forTable(metaClient.getTableConfig().getTableName())
+        .withWriteTableVersion(metaClient.getTableConfig().getTableVersion().versionCode())
+        .withAutoUpgradeVersion(false)
+        .withIndexConfig(
+            HoodieIndexConfig.newBuilder().withIndexType(HoodieIndex.IndexType.INMEMORY).build())
+        .withPopulateMetaFields(metaClient.getTableConfig().populateMetaFields())
+        .withEmbeddedTimelineServerEnabled(false)
+        .withWritesFileIdEncoding(1)
+        // the indexer runs as a table service, which needs a lock even with a single writer
+        .withWriteConcurrencyMode(WriteConcurrencyMode.OPTIMISTIC_CONCURRENCY_CONTROL)
+        .withLockConfig(
+            HoodieLockConfig.newBuilder().withLockProvider(InProcessLockProvider.class).build())
+        .withMetadataConfig(metadataConfig.build())
+        .build();
+  }
+
+  @Override
+  public Optional<String> getLastSyncedSourceIdentifier() {
+    HoodieTableMetaClient metaClient;
+    try {
+      metaClient = getMetaClient();
+    } catch (Exception e) {
+      // no Hudi table exists yet, so the index was never synced
+      return Optional.empty();
+    }
+    Optional<HoodieInstant> lastCommit =
+        metaClient.getCommitsTimeline().filterCompletedInstants().lastInstant().toJavaOptional();
+    if (!lastCommit.isPresent()) {
+      return Optional.empty();
+    }
+    try {
+      String syncMetadata =
+          TimelineUtils.getCommitMetadata(lastCommit.get(), metaClient.getActiveTimeline())
+              .getExtraMetadata()
+              .get(TableSyncMetadata.XTABLE_METADATA);
+      return TableSyncMetadata.fromJson(syncMetadata).map(TableSyncMetadata::getSourceIdentifier);
+    } catch (Exception e) {
+      throw new IllegalStateException(
+          "Failed to read the XTable sync metadata of " + lastCommit.get() + " in " + dataPath, e);
+    }
+  }
+
+  private HoodieTableMetaClient getMetaClient() {
+    HoodieStorage storage =
+        new HoodieHadoopStorage(dataPath, javaSparkContext.hadoopConfiguration());
+    return HoodieTableMetaClient.builder().setStorage(storage).setBasePath(dataPath).build();
   }
 
   private ConversionConfig getConversionConfig(Table icebergTable, String columnName) {
@@ -166,10 +302,8 @@ public class HudiBackedIcebergSecondaryIndex implements Index<Table> {
             .select(col(columnName).cast(DataTypes.StringType))
             .as(Encoders.STRING())
             .toJavaRDD();
-    HoodieStorage storage =
-        new HoodieHadoopStorage(dataPath, javaSparkContext.hadoopConfiguration());
-    HoodieTableMetaClient metaClient =
-        HoodieTableMetaClient.builder().setStorage(storage).setBasePath(dataPath).build();
+    HoodieTableMetaClient metaClient = getMetaClient();
+    HoodieStorage storage = metaClient.getStorage();
     HoodieMetadataConfig metadataConfig =
         HoodieMetadataConfig.newBuilder().enable(true).withSecondaryIndexEnabled(true).build();
     try (HoodieBackedTableMetadata tableMetadata =
