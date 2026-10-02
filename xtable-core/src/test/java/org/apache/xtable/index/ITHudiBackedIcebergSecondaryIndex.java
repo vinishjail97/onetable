@@ -20,6 +20,7 @@ package org.apache.xtable.index;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -32,6 +33,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
@@ -269,6 +271,56 @@ public class ITHudiBackedIcebergSecondaryIndex {
 
       index.syncIndex(icebergTable);
       assertLookupMatchesIceberg(table.getBasePath(), icebergTable, index, Collections.emptyList());
+    }
+  }
+
+  /**
+   * Tracks the snapshot the index was synced to, and drops the index so that it can be created
+   * again, also on another column.
+   */
+  @ParameterizedTest
+  @NullSource
+  @ValueSource(strings = PARTITION_COLUMN)
+  void dropIndexAndTrackSyncedSnapshot(String partitionField) {
+    String tableName = "test_table_" + UUID.randomUUID().toString().replace("-", "_");
+    try (TestIcebergTable table =
+        TestIcebergTable.forStandardSchemaAndPartitioning(
+            tableName, partitionField, tempDir, jsc.hadoopConfiguration())) {
+      table.insertRows(100);
+      Table icebergTable = table.getIcebergTable();
+      HudiBackedIcebergSecondaryIndex index = newIndexFromLocation(icebergTable, INDEXED_COLUMN);
+      assertFalse(index.getLastSyncedSourceIdentifier().isPresent());
+      index.syncIndex(icebergTable);
+      assertEquals(
+          Optional.of(String.valueOf(icebergTable.currentSnapshot().snapshotId())),
+          index.getLastSyncedSourceIdentifier());
+
+      // a new snapshot makes the index stale until the next sync
+      table.insertRows(20);
+      icebergTable.refresh();
+      assertNotEquals(
+          Optional.of(String.valueOf(icebergTable.currentSnapshot().snapshotId())),
+          index.getLastSyncedSourceIdentifier());
+      index.syncIndex(icebergTable);
+      assertEquals(
+          Optional.of(String.valueOf(icebergTable.currentSnapshot().snapshotId())),
+          index.getLastSyncedSourceIdentifier());
+
+      index.dropIndex(icebergTable, INDEXED_COLUMN);
+      assertFalse(index.doesIndexExist(INDEXED_COLUMN));
+      assertFalse(index.getLastSyncedSourceIdentifier().isPresent());
+
+      // a dropped index is built again from all files of the table, also without a new snapshot
+      index.syncIndex(icebergTable);
+      assertLookupMatchesIceberg(table.getBasePath(), icebergTable, index, Collections.emptyList());
+
+      // dropping the index is the way to index another column
+      index.dropIndex(icebergTable, INDEXED_COLUMN);
+      HudiBackedIcebergSecondaryIndex secondColumn =
+          newIndexFromLocation(icebergTable, SECOND_INDEXED_COLUMN);
+      secondColumn.syncIndex(icebergTable);
+      assertFalse(secondColumn.doesIndexExist(INDEXED_COLUMN));
+      assertEveryRowIndexed(table.getBasePath(), icebergTable, secondColumn, SECOND_INDEXED_COLUMN);
     }
   }
 
