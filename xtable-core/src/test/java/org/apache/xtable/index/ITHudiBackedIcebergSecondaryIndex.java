@@ -20,21 +20,20 @@ package org.apache.xtable.index;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import org.apache.commons.lang3.tuple.Pair;
 import org.apache.hadoop.fs.Path;
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaSparkContext;
@@ -63,6 +62,7 @@ import org.apache.xtable.hudi.HudiTestUtil;
  */
 public class ITHudiBackedIcebergSecondaryIndex {
   private static final String INDEXED_COLUMN = "id";
+  private static final String SECOND_INDEXED_COLUMN = "long_field";
   private static final String PARTITION_COLUMN = "level";
 
   @TempDir public static java.nio.file.Path tempDir;
@@ -138,45 +138,123 @@ public class ITHudiBackedIcebergSecondaryIndex {
     }
   }
 
-  /**
-   * Looks every key currently in the Iceberg table up in the index and checks the result against
-   * Iceberg's own {@code _file}, {@code _pos} and partition values. Expectations are read from the
-   * table rather than from the records the test wrote, so this stays correct after rows are updated
-   * or deleted. {@code keysThatMustNotResolve} are looked up as well and must return nothing.
-   */
+  @ParameterizedTest
+  @NullSource
+  @ValueSource(strings = PARTITION_COLUMN)
+  void dropIndexAndTrackSyncedSnapshot(String partitionField) {
+    String tableName = "test_table_" + UUID.randomUUID().toString().replace("-", "_");
+    try (TestIcebergTable table =
+        TestIcebergTable.forStandardSchemaAndPartitioning(
+            tableName, partitionField, tempDir, jsc.hadoopConfiguration())) {
+      table.insertRows(100);
+      Table icebergTable = table.getIcebergTable();
+      HudiBackedIcebergSecondaryIndex index =
+          new HudiBackedIcebergSecondaryIndex(icebergTable, sparkSession, new Properties());
+      assertFalse(index.getLastSyncedSourceIdentifier().isPresent());
+
+      index.syncIndex(icebergTable, INDEXED_COLUMN);
+      // the second index is added without a new snapshot
+      index.syncIndex(icebergTable, SECOND_INDEXED_COLUMN);
+      assertTrue(index.doesIndexExist(INDEXED_COLUMN));
+      assertTrue(index.doesIndexExist(SECOND_INDEXED_COLUMN));
+      assertLookupMatchesIceberg(
+          table, index, SECOND_INDEXED_COLUMN, partitionField != null, Collections.emptyList());
+      assertEquals(
+          Optional.of(String.valueOf(icebergTable.currentSnapshot().snapshotId())),
+          index.getLastSyncedSourceIdentifier());
+
+      // a new snapshot makes the index stale until the next sync
+      table.insertRows(20);
+      icebergTable.refresh();
+      assertNotEquals(
+          Optional.of(String.valueOf(icebergTable.currentSnapshot().snapshotId())),
+          index.getLastSyncedSourceIdentifier());
+      index.syncIndex(icebergTable, INDEXED_COLUMN);
+      assertEquals(
+          Optional.of(String.valueOf(icebergTable.currentSnapshot().snapshotId())),
+          index.getLastSyncedSourceIdentifier());
+      // syncing one column keeps the index of the other column up to date
+      assertLookupMatchesIceberg(
+          table, index, SECOND_INDEXED_COLUMN, partitionField != null, Collections.emptyList());
+
+      index.dropIndex(icebergTable, INDEXED_COLUMN);
+      assertFalse(index.doesIndexExist(INDEXED_COLUMN));
+      assertTrue(index.doesIndexExist(SECOND_INDEXED_COLUMN));
+      assertLookupMatchesIceberg(
+          table, index, SECOND_INDEXED_COLUMN, partitionField != null, Collections.emptyList());
+
+      // a later sync must not bring the dropped index back
+      table.insertRows(10);
+      icebergTable.refresh();
+      index.syncIndex(icebergTable, SECOND_INDEXED_COLUMN);
+      assertFalse(index.doesIndexExist(INDEXED_COLUMN));
+      assertLookupMatchesIceberg(
+          table, index, SECOND_INDEXED_COLUMN, partitionField != null, Collections.emptyList());
+
+      // the dropped index can be built again
+      index.syncIndex(icebergTable, INDEXED_COLUMN);
+      assertTrue(index.doesIndexExist(INDEXED_COLUMN));
+      assertLookupMatchesIceberg(table, index, partitionField != null, Collections.emptyList());
+    }
+  }
+
   private void assertLookupMatchesIceberg(
       TestIcebergTable table,
       HudiBackedIcebergSecondaryIndex index,
       boolean partitioned,
       List<String> keysThatMustNotResolve) {
-    Map<String, Pair<String, Long>> expectedLocations = new HashMap<>();
-    Map<String, Row> expectedPartitions = new HashMap<>();
+    assertLookupMatchesIceberg(table, index, INDEXED_COLUMN, partitioned, keysThatMustNotResolve);
+  }
+
+  /**
+   * Looks every key currently in the Iceberg table up in the index and checks the result against
+   * Iceberg's own {@code _file}, {@code _pos} and partition values. Expectations are read from the
+   * table rather than from the records the test wrote, so this stays correct after rows are updated
+   * or deleted, and for columns whose values repeat. {@code keysThatMustNotResolve} are looked up
+   * as well and must return nothing.
+   */
+  private void assertLookupMatchesIceberg(
+      TestIcebergTable table,
+      HudiBackedIcebergSecondaryIndex index,
+      String columnName,
+      boolean partitioned,
+      List<String> keysThatMustNotResolve) {
     Dataset<Row> icebergRows =
         sparkSession
             .read()
             .format("iceberg")
             .load(table.getBasePath())
+            .where(columnName + " IS NOT NULL")
             .selectExpr(
-                INDEXED_COLUMN, Index.FILE_COLUMN, Index.POSITION_COLUMN, Index.PARTITION_COLUMN);
+                "CAST(" + columnName + " AS STRING) AS " + columnName,
+                Index.FILE_COLUMN,
+                Index.POSITION_COLUMN,
+                Index.PARTITION_COLUMN);
+    List<String> expectedLocations = new ArrayList<>();
+    Set<String> keys = new HashSet<>();
     icebergRows
         .collectAsList()
         .forEach(
             row -> {
-              expectedLocations.put(
-                  row.getString(0),
-                  Pair.of(new Path(row.getString(1)).toUri().getPath(), row.getLong(2)));
-              expectedPartitions.put(row.getString(0), row.getStruct(3));
+              keys.add(row.getString(0));
+              expectedLocations.add(
+                  toLocation(
+                      row.getString(0),
+                      row.getString(1),
+                      row.getLong(2),
+                      partitioned ? row.getStruct(3) : null));
             });
 
-    List<String> keys = new ArrayList<>(expectedLocations.keySet());
     // keys that are not in the table must not produce a result
     keys.add("missing-key-1");
     keys.add("missing-key-2");
     keys.addAll(keysThatMustNotResolve);
     Dataset<Row> keysToLookUp =
-        sparkSession.createDataset(keys, Encoders.STRING()).toDF(INDEXED_COLUMN).repartition(2);
-    Dataset<Row> lookupResults =
-        index.lookup(table.getIcebergTable(), keysToLookUp, INDEXED_COLUMN);
+        sparkSession
+            .createDataset(new ArrayList<>(keys), Encoders.STRING())
+            .toDF(columnName)
+            .repartition(2);
+    Dataset<Row> lookupResults = index.lookup(table.getIcebergTable(), keysToLookUp, columnName);
     if (partitioned) {
       // the partition column must have the type Iceberg's own _partition column has
       assertEquals(
@@ -184,28 +262,29 @@ public class ITHudiBackedIcebergSecondaryIndex {
           lookupResults.schema().apply(Index.PARTITION_COLUMN).dataType().catalogString());
     }
     List<Row> lookupRows = lookupResults.collectAsList();
-    assertEquals(expectedLocations.size(), lookupRows.size());
-
     Set<String> resolvedKeys =
-        lookupRows.stream()
-            .map(row -> row.<String>getAs(INDEXED_COLUMN))
-            .collect(Collectors.toSet());
+        lookupRows.stream().map(row -> row.<String>getAs(columnName)).collect(Collectors.toSet());
     keysThatMustNotResolve.forEach(key -> assertFalse(resolvedKeys.contains(key)));
-
-    for (Row lookupRow : lookupRows) {
-      String key = lookupRow.getAs(INDEXED_COLUMN);
-      Pair<String, Long> expected = expectedLocations.get(key);
-      assertNotNull(expected, "index returned a key that is not in the table");
-      assertEquals(
-          expected.getLeft(),
-          new Path(lookupRow.<String>getAs(Index.FILE_COLUMN)).toUri().getPath());
-      assertEquals(expected.getRight(), lookupRow.<Long>getAs(Index.POSITION_COLUMN));
-      Row partition = lookupRow.getAs(Index.PARTITION_COLUMN);
-      if (partitioned) {
-        assertEquals(expectedPartitions.get(key), partition);
-      } else {
-        assertNull(partition);
-      }
+    if (!partitioned) {
+      lookupRows.forEach(row -> assertNull(row.getAs(Index.PARTITION_COLUMN)));
     }
+
+    List<String> actualLocations =
+        lookupRows.stream()
+            .map(
+                row ->
+                    toLocation(
+                        row.getAs(columnName),
+                        row.getAs(Index.FILE_COLUMN),
+                        row.getAs(Index.POSITION_COLUMN),
+                        row.getAs(Index.PARTITION_COLUMN)))
+            .collect(Collectors.toList());
+    Collections.sort(expectedLocations);
+    Collections.sort(actualLocations);
+    assertEquals(expectedLocations, actualLocations);
+  }
+
+  private static String toLocation(String key, String file, long position, Row partition) {
+    return key + "|" + new Path(file).toUri().getPath() + "|" + position + "|" + partition;
   }
 }
