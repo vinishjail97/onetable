@@ -21,8 +21,11 @@ package org.apache.xtable.index;
 import static org.apache.hudi.metadata.HoodieTableMetadataUtil.PARTITION_NAME_SECONDARY_INDEX_PREFIX;
 import static org.apache.spark.sql.functions.col;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -51,11 +54,14 @@ import org.apache.hudi.common.data.HoodiePairData;
 import org.apache.hudi.common.fs.FSUtils;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.table.HoodieTableVersion;
+import org.apache.hudi.common.table.timeline.HoodieInstant;
+import org.apache.hudi.common.table.timeline.TimelineUtils;
 import org.apache.hudi.data.HoodieJavaPairRDD;
 import org.apache.hudi.data.HoodieJavaRDD;
 import org.apache.hudi.exception.TableNotFoundException;
 import org.apache.hudi.metadata.HoodieBackedTableMetadata;
 import org.apache.hudi.storage.HoodieStorage;
+import org.apache.hudi.storage.StoragePath;
 import org.apache.hudi.storage.hadoop.HoodieHadoopStorage;
 
 import org.apache.iceberg.Schema;
@@ -74,6 +80,7 @@ import org.apache.xtable.conversion.SourceTable;
 import org.apache.xtable.conversion.TargetTable;
 import org.apache.xtable.hudi.HudiTargetConfig;
 import org.apache.xtable.iceberg.IcebergConversionSourceProvider;
+import org.apache.xtable.model.metadata.TableSyncMetadata;
 import org.apache.xtable.model.storage.TableFormat;
 import org.apache.xtable.model.sync.SyncResult;
 import org.apache.xtable.model.sync.SyncStatusCode;
@@ -310,6 +317,53 @@ public class HudiBackedIcebergSecondaryIndex implements Index<Table> {
         .filter(partition -> partition.startsWith(PARTITION_NAME_SECONDARY_INDEX_PREFIX))
         .map(partition -> partition.substring(PARTITION_NAME_SECONDARY_INDEX_PREFIX.length()))
         .collect(Collectors.toSet());
+  }
+
+  /**
+   * Drops the index by deleting the Hudi metadata that holds it. The Iceberg data files are kept,
+   * and the next sync builds the index again from all files of the table.
+   */
+  @Override
+  public void dropIndex(Table icebergTable, String columnName) {
+    Preconditions.checkArgument(
+        indexedColumn.equals(columnName),
+        String.format("Column %s is not the indexed column %s", columnName, indexedColumn));
+    StoragePath metaPath = new StoragePath(dataPath, HoodieTableMetaClient.METAFOLDER_NAME);
+    try (HoodieStorage storage =
+        new HoodieHadoopStorage(dataPath, javaSparkContext.hadoopConfiguration())) {
+      if (storage.exists(metaPath) && !storage.deleteDirectory(metaPath)) {
+        throw new IllegalStateException("Failed to delete " + metaPath);
+      }
+    } catch (IOException e) {
+      throw new UncheckedIOException("Failed to delete " + metaPath, e);
+    }
+    log.info("Dropped the secondary index of column {} of table {}", columnName, tableLocation);
+  }
+
+  @Override
+  public Optional<String> getLastSyncedSourceIdentifier() {
+    HoodieTableMetaClient metaClient;
+    try {
+      metaClient = getMetaClient();
+    } catch (TableNotFoundException e) {
+      // no Hudi table exists yet, so the index was never synced
+      return Optional.empty();
+    }
+    Optional<HoodieInstant> lastCommit =
+        metaClient.getCommitsTimeline().filterCompletedInstants().lastInstant().toJavaOptional();
+    if (!lastCommit.isPresent()) {
+      return Optional.empty();
+    }
+    try {
+      String syncMetadata =
+          TimelineUtils.getCommitMetadata(lastCommit.get(), metaClient.getActiveTimeline())
+              .getExtraMetadata()
+              .get(TableSyncMetadata.XTABLE_METADATA);
+      return TableSyncMetadata.fromJson(syncMetadata).map(TableSyncMetadata::getSourceIdentifier);
+    } catch (IOException e) {
+      throw new UncheckedIOException(
+          "Failed to read the XTable sync metadata of " + lastCommit.get() + " in " + dataPath, e);
+    }
   }
 
   private HoodieTableMetaClient getMetaClient() {

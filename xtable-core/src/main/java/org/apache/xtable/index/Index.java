@@ -18,6 +18,8 @@
  
 package org.apache.xtable.index;
 
+import java.util.Optional;
+
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 
@@ -43,6 +45,23 @@ public interface Index<T> {
    * @param table The table to index
    */
   void syncIndex(T table);
+
+  /**
+   * Drops the index of the given column.
+   *
+   * @param table The table the index belongs to
+   * @param columnName The indexed column
+   */
+  void dropIndex(T table, String columnName);
+
+  /**
+   * Returns the identifier of the source table commit that the index was last synced to, for
+   * example the Iceberg snapshot id. A caller compares it with the current commit of the table to
+   * check whether the index is up to date.
+   *
+   * @return the source commit identifier, or empty when the index was never synced
+   */
+  Optional<String> getLastSyncedSourceIdentifier();
 
   /**
    * Looks up the given keys in the index of a column.
