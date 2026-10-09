@@ -99,7 +99,7 @@ case class IndexPruningRule(spark: SparkSession) extends Rule[LogicalPlan] {
         table,
         relation.catalog.map(_.name()),
         relation.identifier,
-        definitions)
+        definition)
       if isCurrent(table, definition, index.getLastSyncedSourceIdentifier, snapshot.snapshotId())
       // the files a scan reads after Iceberg's partition and min/max pruning
       candidates = planFiles(table, snapshot.snapshotId(), definition.column, keys)

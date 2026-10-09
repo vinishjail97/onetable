@@ -60,13 +60,14 @@ DROP INDEX [IF EXISTS] email_idx ON prod.db.customer;
 ```
 
 - An index covers one top level column of type `string`, `int` or `bigint`. A table can have one
-  index per column.
+  index, and its column does not change. To index another column, drop the index and create a new
+  one.
 - The index definition is stored in the table properties as `xtable.index.<name>.column`, and
   options as `xtable.index.<name>.option.<key>`. `SHOW TBLPROPERTIES` lists them.
 - Options are passed to the Hudi target that stores the index, for example the
   `xtable.hudi.target.metadata.record.index.*` file group counts.
-- The index files are stored under `.hoodie/` in the data folder of the table. Dropping the last
-  index keeps the Hudi record index there.
+- The index files are stored under `.hoodie/` in the data folder of the table. Dropping the index
+  deletes that folder and keeps the data files.
 
 ## Querying with an index
 

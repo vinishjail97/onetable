@@ -127,6 +127,10 @@ public class ITXTableIndexExtensions {
     createTable(partitioned);
     appendRows(0, 1600, 4);
 
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> spark.sql("CREATE INDEX score_idx ON " + TABLE + " USING xtable (score)"),
+        "double columns are not supported");
     spark.sql("CREATE INDEX email_idx ON " + TABLE + " USING xtable (email)");
     assertEquals("email", tableProperties().get("xtable.index.email_idx.column"));
     spark.sql("CREATE INDEX IF NOT EXISTS email_idx ON " + TABLE + " USING xtable (email)");
@@ -136,11 +140,11 @@ public class ITXTableIndexExtensions {
     assertThrows(
         IllegalArgumentException.class,
         () -> spark.sql("CREATE INDEX email_idx2 ON " + TABLE + " USING xtable (email)"),
-        "a column has at most one index");
+        "a table has at most one index");
     assertThrows(
         IllegalArgumentException.class,
-        () -> spark.sql("CREATE INDEX score_idx ON " + TABLE + " USING xtable (score)"),
-        "double columns are not supported");
+        () -> spark.sql("CREATE INDEX id_idx ON " + TABLE + " USING xtable (id)"),
+        "a table has at most one index");
 
     List<String> emails = emails(7, 123, 1599);
     assertUsesIndex("SELECT * FROM " + TABLE + " WHERE email = '" + emails.get(0) + "'");
@@ -198,21 +202,21 @@ public class ITXTableIndexExtensions {
         "SELECT * FROM " + TABLE + " WHERE email IN " + inList(emails(7, 8)));
     assertUsesIndex("SELECT * FROM " + TABLE + " WHERE email IN " + inList(emails(8, 123)));
 
-    // a second index on a long column, added without a new snapshot
-    spark.sql("CREATE INDEX id_idx ON " + TABLE + " USING xtable (id)");
-    assertUsesIndex("SELECT * FROM " + TABLE + " WHERE id IN (20, 900, 1650)");
-    assertUsesIndex("SELECT * FROM " + TABLE + " WHERE email = '" + emails.get(1) + "'");
-
     spark.sql("DROP INDEX email_idx ON " + TABLE);
     assertFalse(tableProperties().containsKey("xtable.index.email_idx.column"));
     assertDoesNotUseIndex("SELECT * FROM " + TABLE + " WHERE email = '" + emails.get(1) + "'");
-    assertUsesIndex("SELECT * FROM " + TABLE + " WHERE id = 900");
     spark.sql("DROP INDEX IF EXISTS email_idx ON " + TABLE);
     assertThrows(NoSuchIndexException.class, () -> spark.sql("DROP INDEX email_idx ON " + TABLE));
     assertThrows(
         NoSuchIndexException.class, () -> spark.sql("REFRESH INDEX email_idx ON " + TABLE));
 
-    // the dropped index can be created again
+    // after a drop, the table can be indexed on another column, without a new snapshot
+    spark.sql("CREATE INDEX id_idx ON " + TABLE + " USING xtable (id)");
+    assertUsesIndex("SELECT * FROM " + TABLE + " WHERE id IN (20, 900, 1650)");
+    assertDoesNotUseIndex("SELECT * FROM " + TABLE + " WHERE email = '" + emails.get(1) + "'");
+    spark.sql("DROP INDEX id_idx ON " + TABLE);
+
+    // and the dropped index can be created again
     spark.sql("CREATE INDEX email_idx ON " + TABLE + " USING xtable (email)");
     assertUsesIndex("SELECT * FROM " + TABLE + " WHERE email = '" + emails.get(1) + "'");
 

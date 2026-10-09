@@ -29,13 +29,16 @@ import org.apache.iceberg.types.Type.TypeID
 import scala.collection.JavaConverters._
 
 import org.apache.xtable.conversion.SourceTable
+import org.apache.xtable.hudi.HudiTargetConfig
 import org.apache.xtable.iceberg.IcebergCatalogConfig
 import org.apache.xtable.index.HudiBackedIcebergSecondaryIndex
 import org.apache.xtable.model.storage.TableFormat
 
 /**
- * An XTable index on one column of an Iceberg table. The definition is kept in the table
- * properties, so every session and engine that reads the table can find it:
+ * An XTable index on one column of an Iceberg table. A table has at most one XTable index, and its
+ * column does not change: to index another column, drop the index and create a new one. The
+ * definition is kept in the table properties, so every session and engine that reads the table can
+ * find it:
  *
  *   - {@code xtable.index.<name>.column}: the indexed column
  *   - {@code xtable.index.<name>.option.<key>}: an option of the index, passed to the Hudi target
@@ -91,7 +94,7 @@ object IndexDefinition {
   }
 
   /**
-   * The XTable index of a table, configured with the options of all its index definitions.
+   * The XTable index of a table, configured with the column and options of its index definition.
    *
    * @param catalogName the Spark catalog the table was loaded from, if any
    * @param ident the identifier of the table in that catalog, if any
@@ -101,11 +104,12 @@ object IndexDefinition {
       table: Table,
       catalogName: Option[String],
       ident: Option[Identifier],
-      definitions: Seq[IndexDefinition]): HudiBackedIcebergSecondaryIndex = {
+      definition: IndexDefinition): HudiBackedIcebergSecondaryIndex = {
     val properties = new Properties()
-    definitions.foreach(_.options.foreach { case (key, value) =>
+    definition.options.foreach { case (key, value) =>
       properties.setProperty(key, value)
-    })
+    }
+    properties.setProperty(HudiTargetConfig.SECONDARY_INDEX_COLUMN, definition.column)
     new HudiBackedIcebergSecondaryIndex(
       table,
       sourceTable(table.name(), table.location(), catalogName, ident, spark.conf.getAll),

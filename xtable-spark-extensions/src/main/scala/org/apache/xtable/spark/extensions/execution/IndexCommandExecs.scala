@@ -33,7 +33,8 @@ import org.apache.xtable.spark.extensions.IndexDefinition
 
 /**
  * Builds an XTable index on one column and records its definition in the table properties. The
- * properties are written only after the index is built, so a failed build leaves no definition.
+ * properties are written only after the index is built, so a failed build leaves no definition. A
+ * table has at most one XTable index.
  */
 case class CreateIndexExec(
     catalog: TableCatalog,
@@ -56,6 +57,11 @@ case class CreateIndexExec(
       }
       throw new IndexAlreadyExistsException(indexName, ident.toString, None)
     }
+    definitions.headOption.foreach { existing =>
+      throw new IllegalArgumentException(
+        s"Table $ident already has the XTable index ${existing.name} on column " +
+          s"${existing.column}. A table has one XTable index, so drop it to index another column")
+    }
     val column = columns match {
       case Seq(Seq(name)) => name
       case _ =>
@@ -71,15 +77,11 @@ case class CreateIndexExec(
         s"Cannot index column ${field.name()} of type ${field.`type`()}: an XTable index supports " +
           IndexDefinition.SupportedTypes.map(_.toString.toLowerCase).mkString(", ") + " columns")
     }
-    definitions.find(_.column.equalsIgnoreCase(field.name())).foreach { existing =>
-      throw new IllegalArgumentException(
-        s"Column ${field.name()} of table $ident already has the XTable index ${existing.name}")
-    }
 
     val definition = IndexDefinition(indexName, field.name(), options)
     IndexDefinition
-      .newIndex(session, icebergTable, Some(catalog.name()), Some(ident), definitions :+ definition)
-      .syncIndex(icebergTable, field.name())
+      .newIndex(session, icebergTable, Some(catalog.name()), Some(ident), definition)
+      .syncIndex(icebergTable)
     catalog.alterTable(
       ident,
       definition.properties.map { case (key, value) =>
@@ -107,15 +109,10 @@ case class DropIndexExec(
       case None => throw new NoSuchIndexException(indexName, ident.toString, None)
       case Some(definition) =>
         val icebergTable = table.table()
-        val index = IndexDefinition.newIndex(
-          session,
-          icebergTable,
-          Some(catalog.name()),
-          Some(ident),
-          definitions)
-        if (index.doesIndexExist(definition.column)) {
-          index.dropIndex(icebergTable, definition.column)
-        }
+        // drops what a failed build left behind too
+        IndexDefinition
+          .newIndex(session, icebergTable, Some(catalog.name()), Some(ident), definition)
+          .dropIndex(icebergTable, definition.column)
         catalog.alterTable(
           ident,
           definition.properties.keys.map(key => TableChange.removeProperty(key)).toSeq: _*)
@@ -135,16 +132,16 @@ case class RefreshIndexExec(
   override def output: Seq[Attribute] = Nil
 
   override protected def run(): Seq[InternalRow] = {
-    val definitions = IndexDefinition.fromProperties(table.properties())
-    val definition = definitions
+    val definition = IndexDefinition
+      .fromProperties(table.properties())
       .find(_.name.equalsIgnoreCase(indexName))
       .getOrElse(throw new NoSuchIndexException(indexName, ident.toString, None))
     val icebergTable = table.table()
     // the snapshot the table had when the command was planned may be stale
     icebergTable.refresh()
     IndexDefinition
-      .newIndex(session, icebergTable, Some(catalog.name()), Some(ident), definitions)
-      .syncIndex(icebergTable, definition.column)
+      .newIndex(session, icebergTable, Some(catalog.name()), Some(ident), definition)
+      .syncIndex(icebergTable)
     Nil
   }
 }
