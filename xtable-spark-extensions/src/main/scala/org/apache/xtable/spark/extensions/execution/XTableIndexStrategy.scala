@@ -56,8 +56,8 @@ object XTableIndexStrategy extends SparkStrategy {
           ignoreIfNotExists) =>
       DropIndexExec(catalog, ident, table, indexName, ignoreIfNotExists) :: Nil
 
-    case RefreshIndex(ResolvedTable(_, ident, table: SparkTable, _), indexName) =>
-      RefreshIndexExec(ident, table, indexName) :: Nil
+    case RefreshIndex(ResolvedTable(catalog, ident, table: SparkTable, _), indexName) =>
+      RefreshIndexExec(catalog, ident, table, indexName) :: Nil
 
     case RefreshIndex(ResolvedTable(_, ident, _, _), _) =>
       throw new UnsupportedOperationException(

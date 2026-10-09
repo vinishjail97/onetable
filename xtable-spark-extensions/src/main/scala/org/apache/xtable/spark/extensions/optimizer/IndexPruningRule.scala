@@ -94,7 +94,12 @@ case class IndexPruningRule(spark: SparkSession) extends Rule[LogicalPlan] {
         .findIndexedKeys(condition, relation.output, definitions, conf.resolver)
       if withinKeyLimit(table, definition, keys)
       snapshot <- Option(table.currentSnapshot())
-      index = IndexDefinition.newIndex(spark, table, definitions)
+      index = IndexDefinition.newIndex(
+        spark,
+        table,
+        relation.catalog.map(_.name()),
+        relation.identifier,
+        definitions)
       if isCurrent(table, definition, index.getLastSyncedSourceIdentifier, snapshot.snapshotId())
       // the files a scan reads after Iceberg's partition and min/max pruning
       candidates = planFiles(table, snapshot.snapshotId(), definition.column, keys)

@@ -78,7 +78,7 @@ case class CreateIndexExec(
 
     val definition = IndexDefinition(indexName, field.name(), options)
     IndexDefinition
-      .newIndex(session, icebergTable, definitions :+ definition)
+      .newIndex(session, icebergTable, Some(catalog.name()), Some(ident), definitions :+ definition)
       .syncIndex(icebergTable, field.name())
     catalog.alterTable(
       ident,
@@ -107,7 +107,12 @@ case class DropIndexExec(
       case None => throw new NoSuchIndexException(indexName, ident.toString, None)
       case Some(definition) =>
         val icebergTable = table.table()
-        val index = IndexDefinition.newIndex(session, icebergTable, definitions)
+        val index = IndexDefinition.newIndex(
+          session,
+          icebergTable,
+          Some(catalog.name()),
+          Some(ident),
+          definitions)
         if (index.doesIndexExist(definition.column)) {
           index.dropIndex(icebergTable, definition.column)
         }
@@ -120,7 +125,11 @@ case class DropIndexExec(
 }
 
 /** Syncs an XTable index with the current snapshot of the table. */
-case class RefreshIndexExec(ident: Identifier, table: SparkTable, indexName: String)
+case class RefreshIndexExec(
+    catalog: TableCatalog,
+    ident: Identifier,
+    table: SparkTable,
+    indexName: String)
     extends LeafV2CommandExec {
 
   override def output: Seq[Attribute] = Nil
@@ -134,7 +143,7 @@ case class RefreshIndexExec(ident: Identifier, table: SparkTable, indexName: Str
     // the snapshot the table had when the command was planned may be stale
     icebergTable.refresh()
     IndexDefinition
-      .newIndex(session, icebergTable, definitions)
+      .newIndex(session, icebergTable, Some(catalog.name()), Some(ident), definitions)
       .syncIndex(icebergTable, definition.column)
     Nil
   }

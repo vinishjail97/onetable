@@ -21,13 +21,17 @@ package org.apache.xtable.spark.extensions
 import java.util.Properties
 
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.connector.catalog.Identifier
 
-import org.apache.iceberg.Table
+import org.apache.iceberg.{CatalogProperties, CatalogUtil, Table}
 import org.apache.iceberg.types.Type.TypeID
 
 import scala.collection.JavaConverters._
 
+import org.apache.xtable.conversion.SourceTable
+import org.apache.xtable.iceberg.IcebergCatalogConfig
 import org.apache.xtable.index.HudiBackedIcebergSecondaryIndex
+import org.apache.xtable.model.storage.TableFormat
 
 /**
  * An XTable index on one column of an Iceberg table. The definition is kept in the table
@@ -86,15 +90,81 @@ object IndexDefinition {
       }
   }
 
-  /** The XTable index of a table, configured with the options of all its index definitions. */
+  /**
+   * The XTable index of a table, configured with the options of all its index definitions.
+   *
+   * @param catalogName the Spark catalog the table was loaded from, if any
+   * @param ident the identifier of the table in that catalog, if any
+   */
   def newIndex(
       spark: SparkSession,
       table: Table,
+      catalogName: Option[String],
+      ident: Option[Identifier],
       definitions: Seq[IndexDefinition]): HudiBackedIcebergSecondaryIndex = {
     val properties = new Properties()
     definitions.foreach(_.options.foreach { case (key, value) =>
       properties.setProperty(key, value)
     })
-    new HudiBackedIcebergSecondaryIndex(table, spark, properties)
+    new HudiBackedIcebergSecondaryIndex(
+      table,
+      sourceTable(table.name(), table.location(), catalogName, ident, spark.conf.getAll),
+      spark,
+      properties)
   }
+
+  /**
+   * Describes how XTable loads the table for a sync. A table from a Spark catalog is loaded through
+   * an Iceberg catalog built from the same {@code spark.sql.catalog.<name>.*} options, and a table
+   * read by path is loaded from its location.
+   *
+   * @param sparkConf the Spark session configuration, which holds the catalog options
+   */
+  def sourceTable(
+      tableName: String,
+      tableLocation: String,
+      catalogName: Option[String],
+      ident: Option[Identifier],
+      sparkConf: Map[String, String]): SourceTable = {
+    val builder = SourceTable
+      .builder()
+      .name(tableName)
+      .basePath(tableLocation)
+      .formatName(TableFormat.ICEBERG)
+    for (catalog <- catalogName; identifier <- ident) {
+      val prefix = s"spark.sql.catalog.$catalog."
+      val options = sparkConf.collect {
+        case (key, value) if key.startsWith(prefix) => key.substring(prefix.length) -> value
+      }
+      builder
+        .name(identifier.name())
+        .namespace(identifier.namespace())
+        .catalogConfig(
+          IcebergCatalogConfig
+            .builder()
+            .catalogName(catalog)
+            .catalogImpl(catalogImpl(options))
+            .catalogOptions(options.asJava)
+            .build())
+    }
+    builder.build()
+  }
+
+  /** Resolves the catalog implementation from the options the way Iceberg's Spark catalog does. */
+  private def catalogImpl(options: Map[String, String]): String =
+    options.getOrElse(
+      CatalogProperties.CATALOG_IMPL,
+      options
+        .getOrElse(CatalogUtil.ICEBERG_CATALOG_TYPE, CatalogUtil.ICEBERG_CATALOG_TYPE_HIVE)
+        .toLowerCase match {
+        case CatalogUtil.ICEBERG_CATALOG_TYPE_HIVE => CatalogUtil.ICEBERG_CATALOG_HIVE
+        case CatalogUtil.ICEBERG_CATALOG_TYPE_HADOOP => CatalogUtil.ICEBERG_CATALOG_HADOOP
+        case CatalogUtil.ICEBERG_CATALOG_TYPE_REST => CatalogUtil.ICEBERG_CATALOG_REST
+        case CatalogUtil.ICEBERG_CATALOG_TYPE_GLUE => CatalogUtil.ICEBERG_CATALOG_GLUE
+        case CatalogUtil.ICEBERG_CATALOG_TYPE_NESSIE => CatalogUtil.ICEBERG_CATALOG_NESSIE
+        case CatalogUtil.ICEBERG_CATALOG_TYPE_JDBC => CatalogUtil.ICEBERG_CATALOG_JDBC
+        case other =>
+          throw new IllegalArgumentException(s"Unknown Iceberg catalog type $other")
+      }
+    )
 }
